@@ -7,6 +7,18 @@ from tqdm import tqdm
 import pandas as pd
 import random
 import os
+import logging
+from datetime import datetime
+
+# Set up logging
+log_dir = 'log'
+os.makedirs(log_dir, exist_ok=True)
+timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+log_file = os.path.join(log_dir, f'baseline_comparison_{timestamp}.log')
+logging.basicConfig(level=logging.INFO,
+                    format='%(asctime)s - %(levelname)s - %(message)s',
+                    handlers=[logging.FileHandler(log_file),
+                              logging.StreamHandler()])
 
 # Set random seed for reproducibility
 random.seed(42)
@@ -14,7 +26,7 @@ torch.manual_seed(42)
 
 # Check device
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-print(f"Using device: {device}")
+logging.info(f"Using device: {device}")
 
 # Define transforms
 transform = transforms.Compose([
@@ -37,6 +49,7 @@ def create_reduced_dataset(dataset, reduction_percentage):
     num_samples = len(dataset)
     num_reduced_samples = int(num_samples * reduction_percentage)
     indices = random.sample(range(num_samples), num_reduced_samples)
+    logging.info(f"Created reduced dataset with {num_reduced_samples} samples")
     return Subset(dataset, indices)
 
 # Define dataset sizes
@@ -103,6 +116,7 @@ def get_model(model_name, num_classes=102):
     else:
         raise ValueError(f"Model {model_name} is not supported.")
 
+    logging.info(f"Loaded and modified {model_name} for {num_classes} classes")
     return model.to(device)
 
 # Function to calculate accuracy
@@ -119,7 +133,9 @@ def calculate_accuracy(loader, model):
             _, predicted = torch.max(outputs.data, 1)
             total += labels.size(0)
             correct += (predicted == labels).sum().item()
-    return 100 * correct / total
+    accuracy = 100 * correct / total
+    logging.info(f"Calculated accuracy: {accuracy:.2f}%")
+    return accuracy
 
 # Function to train and evaluate a model
 def train_and_evaluate(model, train_loader, val_loader, test_loader, num_epochs=10, learning_rate=0.001):
@@ -147,7 +163,7 @@ def train_and_evaluate(model, train_loader, val_loader, test_loader, num_epochs=
 
         avg_loss = running_loss / len(train_loader)
         val_accuracy = calculate_accuracy(val_loader, model)
-        print(f"Epoch [{epoch + 1}/{num_epochs}], Loss: {avg_loss:.4f}, Validation Accuracy: {val_accuracy:.2f}%")
+        logging.info(f"Epoch [{epoch + 1}/{num_epochs}], Loss: {avg_loss:.4f}, Validation Accuracy: {val_accuracy:.2f}%")
 
     # Evaluate on test set
     test_accuracy = calculate_accuracy(test_loader, model)
@@ -162,7 +178,7 @@ results = {size: {} for size in dataset_sizes.keys()}
 
 # Iterate over dataset sizes
 for size_name, reduction in dataset_sizes.items():
-    print(f"\n=== Dataset Size: {size_name} ({int(reduction*100)}%) ===")
+    logging.info(f"\n=== Dataset Size: {size_name} ({int(reduction*100)}%) ===")
 
     # Create reduced datasets
     reduced_train = create_reduced_dataset(train_dataset, reduction)
@@ -177,11 +193,11 @@ for size_name, reduction in dataset_sizes.items():
 
     # Iterate over models
     for model_name in model_names:
-        print(f"\nTraining model: {model_name}")
+        logging.info(f"\nTraining model: {model_name}")
         model = get_model(model_name)
 
         test_acc = train_and_evaluate(model, train_loader, val_loader, test_loader, num_epochs=10, learning_rate=0.001)
-        print(f"Test Accuracy for {model_name} with {size_name} data: {test_acc:.2f}%")
+        logging.info(f"Test Accuracy for {model_name} with {size_name} data: {test_acc:.2f}%")
 
         # Store the result
         results[size_name][model_name] = test_acc
@@ -195,7 +211,7 @@ for size_name in dataset_sizes.keys():
     df = pd.DataFrame(list(results[size_name].items()), columns=['Model', 'Test Accuracy (%)'])
     csv_path = os.path.join(results_dir, f"performance_{size_name}.csv")
     df.to_csv(csv_path, index=False)
-    print(f"\nSaved performance table for {size_name} dataset to {csv_path}")
+    logging.info(f"\nSaved performance table for {size_name} dataset to {csv_path}")
 
 # Optionally, create a single CSV with all results
 all_results = []
@@ -206,7 +222,7 @@ for size_name, models in results.items():
 all_df = pd.DataFrame(all_results)
 all_csv_path = os.path.join(results_dir, "performance_all_sizes.csv")
 all_df.to_csv(all_csv_path, index=False)
-print(f"\nSaved all performance results to {all_csv_path}")
+logging.info(f"\nSaved all performance results to {all_csv_path}")
 
 # Optionally, visualize the results using plots
 import matplotlib.pyplot as plt
@@ -221,7 +237,7 @@ plt.title("Model Performance on Flowers102 Dataset")
 plt.ylabel("Model")
 plt.xlabel("Dataset Size")
 plt.tight_layout()
-plt_path = os.path.join(results_dir, "performance_heatmap.png")
+plt_path = os.path.join(results_dir, f"performance_heatmap_{timestamp}.png")
 plt.savefig(plt_path)
-plt.show()
-print(f"Saved performance heatmap to {plt_path}")
+plt.close()
+logging.info(f"Saved performance heatmap to {plt_path}")
