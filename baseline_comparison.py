@@ -142,6 +142,11 @@ def train_and_evaluate(model, train_loader, val_loader, test_loader, num_epochs=
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.SGD(model.parameters(), lr=learning_rate, momentum=0.9)
 
+    best_val_accuracy = 0
+    patience = 10
+    counter = 0
+    best_model = None
+
     for epoch in range(num_epochs):
         model.train()
         running_loss = 0.0
@@ -164,6 +169,21 @@ def train_and_evaluate(model, train_loader, val_loader, test_loader, num_epochs=
         avg_loss = running_loss / len(train_loader)
         val_accuracy = calculate_accuracy(val_loader, model)
         logging.info(f"Epoch [{epoch + 1}/{num_epochs}], Loss: {avg_loss:.4f}, Validation Accuracy: {val_accuracy:.2f}%")
+
+        # Early stopping check
+        if val_accuracy > best_val_accuracy:
+            best_val_accuracy = val_accuracy
+            counter = 0
+            best_model = model.state_dict()
+        else:
+            counter += 1
+            if counter >= patience:
+                logging.info(f"Early stopping triggered after {epoch + 1} epochs")
+                break
+
+    # Load the best model before final evaluation
+    if best_model is not None:
+        model.load_state_dict(best_model)
 
     # Evaluate on test set
     test_accuracy = calculate_accuracy(test_loader, model)
@@ -196,7 +216,7 @@ for size_name, reduction in dataset_sizes.items():
         logging.info(f"\nTraining model: {model_name}")
         model = get_model(model_name)
 
-        test_acc = train_and_evaluate(model, train_loader, val_loader, test_loader, num_epochs=10, learning_rate=0.001)
+        test_acc = train_and_evaluate(model, train_loader, val_loader, test_loader, num_epochs=100, learning_rate=0.001)
         logging.info(f"Test Accuracy for {model_name} with {size_name} data: {test_acc:.2f}%")
 
         # Store the result
@@ -209,7 +229,7 @@ for size_name, reduction in dataset_sizes.items():
 # Convert results to DataFrames and save as CSV
 for size_name in dataset_sizes.keys():
     df = pd.DataFrame(list(results[size_name].items()), columns=['Model', 'Test Accuracy (%)'])
-    csv_path = os.path.join(results_dir, f"performance_{size_name}.csv")
+    csv_path = os.path.join(results_dir, f"performance_{size_name}_{timestamp}.csv")
     df.to_csv(csv_path, index=False)
     logging.info(f"\nSaved performance table for {size_name} dataset to {csv_path}")
 
@@ -220,7 +240,7 @@ for size_name, models in results.items():
         all_results.append({'Dataset Size': size_name, 'Model': model_name, 'Test Accuracy (%)': acc})
 
 all_df = pd.DataFrame(all_results)
-all_csv_path = os.path.join(results_dir, "performance_all_sizes.csv")
+all_csv_path = os.path.join(results_dir, f"performance_all_sizes_{timestamp}.csv")
 all_df.to_csv(all_csv_path, index=False)
 logging.info(f"\nSaved all performance results to {all_csv_path}")
 
