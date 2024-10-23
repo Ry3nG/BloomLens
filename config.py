@@ -2,107 +2,96 @@ from dataclasses import dataclass, field
 from typing import Optional, Literal
 from datetime import datetime
 
+from dataclasses import dataclass, field
+from typing import Optional, Literal
+from datetime import datetime
+
 @dataclass
 class Config:
-    """
-    Configuration class for a Few-Shot Learning model using Prototypical Networks.
+    """Configuration class for Few-Shot Learning model."""
 
-    This class contains all the hyperparameters and settings for training and
-    evaluating the model, including model architecture, few-shot settings,
-    training parameters, and advanced configurations.
-    """
+    def __init__(self, **kwargs):
+        """Initialize config with optional overrides from command line."""
+        # Set defaults first
+        self.set_defaults()
+        # Override with any provided arguments
+        for key, value in kwargs.items():
+            if hasattr(self, key):
+                setattr(self, key, value)
+            else:
+                raise ValueError(f"Unknown configuration parameter: {key}")
 
-    # Experiment Configuration
-    experiment_name: str = field(default_factory=lambda: f"experiment_{datetime.now().strftime('%Y%m%d_%H%M%S')}")
-    """Unique name for the experiment, used for logging and saving models."""
+        # Post-initialization processing
+        self._post_init()
 
-    # Model configuration
-    backbone: str = "densenet201"
-    """The backbone architecture for feature extraction (e.g., 'densenet201', 'resnet50')."""
+    def set_defaults(self):
+        """Set default values for all configuration parameters."""
+        # Experiment Configuration
+        self.experiment_name = f"experiment_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        self.backbone = "densenet201"
+        self.embedding_dim = 512
+        self.pretrained = True
 
-    embedding_dim: int = 512
-    """Dimension of the embedding space for prototypes and queries."""
+        # Few-shot configuration
+        self.n_way = 5
+        self.k_shot = 1
+        self.n_query = 5  # Training query size (will be automatically adjusted)
+        self.eval_n_query = 5  # Evaluation query size (fixed)
 
-    pretrained: bool = True
-    """Whether to use pretrained weights for the backbone."""
+        # Training Configuration
+        self.num_epochs = 100
+        self.batch_size = 1
+        self.learning_rate = 0.00001
+        self.weight_decay = 0.0001
 
-    # Few-shot configuration
-    n_way: int = 5
-    """Number of classes in each few-shot task."""
+        # Prototypical Network Configuration
+        self.distance_metric = "euclidean"
+        self.temperature = 64.0
 
-    k_shot: int = 1
-    """Number of support examples per class."""
+        # Advanced Configuration
+        self.use_task_attention = True
+        self.use_self_attention = True
+        self.use_mixup = True
+        self.mixup_alpha = 0.2
 
-    n_query: int = 5
-    """Number of query examples per class."""
+        # Regularization
+        self.dropout_rate = 0.1
+        self.label_smoothing = 0.1
 
-    # Training Configuration
-    num_epochs: int = 100
-    """Total number of training epochs."""
+        # Optimizer Configuration
+        self.optimizer = "adamw"
+        self.scheduler = "cosine"
+        self.warmup_epochs = 10
 
-    batch_size: int = 1
-    """Number of episodes per batch."""
+        # Data Configuration
+        self.image_size = 224
+        self.num_workers = 4
 
-    learning_rate: float = 0.0001
-    """Initial learning rate for the optimizer."""
+        # Logging and Saving Configuration
+        self.log_dir = "logs"
+        self.save_dir = "saved_models"
+        self.save_frequency = 1
 
-    weight_decay: float = 0.0001
-    """L2 regularization factor."""
+        # Early Stopping Configuration
+        self.patience = 10
 
-    # Prototypical Network Configuration
-    distance_metric: Literal["euclidean", "cosine"] = "euclidean"
-    """Distance metric used for prototype comparison ('euclidean' or 'cosine')."""
+        # Data percentage
+        self.data_percentage = 1.0
+        self.min_samples_per_class = 1  # Minimum samples required per class
 
-    temperature: float = 64.0
-    """Temperature scaling factor for softmax in the classification layer."""
+    def _post_init(self):
+        """Validate and process configuration after initialization."""
+        if self.data_percentage != 1.0:
+            self.experiment_name = f"{self.experiment_name}_data{int(self.data_percentage*100)}pct"
+            # Adjust n_query based on expected data reduction
+            expected_samples = 10 * self.data_percentage  # 10 is the original samples per class
+            self.n_query = max(1, min(self.n_query, int(expected_samples) - self.k_shot))
+            print(f"Adjusted n_query to {self.n_query} for training")
 
-    # Advanced Configuration
-    use_task_attention: bool = True
-    """Enable task-specific attention mechanism."""
-
-    use_self_attention: bool = True
-    """Enable self-attention mechanism in the backbone."""
-
-    use_mixup: bool = True
-    """Enable episode-level mixup for data augmentation."""
-
-    mixup_alpha: float = 0.2
-    """Alpha parameter for the beta distribution in mixup."""
-
-    # Regularization
-    dropout_rate: float = 0.1
-    """Dropout rate applied in the model."""
-
-    label_smoothing: float = 0.1
-    """Label smoothing factor for loss calculation."""
-
-    # Optimizer Configuration
-    optimizer: str = "adamw"
-    """Optimizer choice ('adam', 'adamw', or 'sgd')."""
-
-    scheduler: str = "cosine"
-    """Learning rate scheduler ('cosine', 'step', or 'none')."""
-
-    warmup_epochs: int = 10
-    """Number of epochs for learning rate warm-up."""
-
-    # Data Configuration
-    image_size: int = 224
-    """Size of the input images (assumes square images)."""
-
-    num_workers: int = 4
-    """Number of worker processes for data loading."""
-
-    # Logging and Saving Configuration
-    log_dir: str = "logs"
-    """Directory for storing log files."""
-
-    save_dir: str = "saved_models"
-    """Directory for saving model checkpoints."""
-
-    save_frequency: int = 1
-    """Frequency (in epochs) for saving model checkpoints."""
-
-    # Early Stopping Configuration
-    patience: int = 10
-    """Number of epochs to wait for improvement before early stopping."""
+        # Additional validation
+        if self.k_shot < 1:
+            raise ValueError("k_shot must be at least 1")
+        if self.n_query < 1:
+            raise ValueError("n_query must be at least 1")
+        if self.eval_n_query < 1:
+            raise ValueError("eval_n_query must be at least 1")

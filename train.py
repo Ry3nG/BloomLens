@@ -8,10 +8,36 @@ import wandb
 import logging
 from datetime import datetime
 import os
+import argparse
+import torchvision.transforms as T
 
 from config import Config
 from models.protonet import PrototypicalNetwork
 from dataset.episode_generator import EpisodeGenerator, mixup_episode
+
+def parse_args():
+    """Parse command line arguments."""
+    parser = argparse.ArgumentParser(description='Train BloomLens model')
+
+    # Add arguments for commonly modified parameters
+    parser.add_argument('--data_percentage', type=float, default=1.0,
+                      help='Percentage of training data to use (default: 1.0)')
+    parser.add_argument('--experiment_name', type=str, default=None,
+                      help='Name for the experiment (default: auto-generated)')
+    parser.add_argument('--backbone', type=str, default='densenet201',
+                      help='Backbone architecture (default: densenet201)')
+    parser.add_argument('--k_shot', type=int, default=1,
+                      help='Number of support examples per class (default: 1)')
+    # Add other commonly modified parameters here
+
+    return parser.parse_args()
+
+def setup_config():
+    """Create config from command line arguments."""
+    args = parse_args()
+    # Convert args to dictionary, removing None values
+    arg_dict = {k: v for k, v in vars(args).items() if v is not None}
+    return Config(**arg_dict)
 
 def get_criterion(config):
     """Get the loss criterion based on config"""
@@ -112,111 +138,139 @@ def setup_logging(config):
     return timestamp
 
 def main():
-    config = Config()
-
-    # Setup logging and get timestamp
+    config = setup_config()
     timestamp = setup_logging(config)
 
-    # Initialize wandb
-    wandb.init(project="bloomlens", config=config, name=f"{config.experiment_name}_{timestamp}")
+    # Initialize wandb with updated config
+    wandb.init(
+        project="bloomlens",
+        name=config.experiment_name,
+        config=vars(config)
+    )
 
-    # Load dataset
-    train_dataset = Flowers102(root='./data', split='train', download=True)
-    val_dataset = Flowers102(root='./data', split='val', download=True)
+    # Setup transforms
+    train_transform = T.Compose([
+        T.RandomResizedCrop(config.image_size),
+        T.RandomHorizontalFlip(),
+        T.ColorJitter(0.1, 0.1, 0.1),
+        T.ToTensor(),
+        T.Normalize(mean=[0.485, 0.456, 0.406],
+                   std=[0.229, 0.224, 0.225])
+    ])
+
+    eval_transform = T.Compose([
+        T.Resize(int(config.image_size * 1.14)),
+        T.CenterCrop(config.image_size),
+        T.ToTensor(),
+        T.Normalize(mean=[0.485, 0.456, 0.406],
+                   std=[0.229, 0.224, 0.225])
+    ])
+
+    # Load datasets with transforms
+    train_dataset = Flowers102(root='./data', split='train', transform=train_transform, download=True)
+    val_dataset = Flowers102(root='./data', split='val', transform=eval_transform, download=True)
+    test_dataset = Flowers102(root='./data', split='test', transform=eval_transform, download=True)
+
+    # Log dataset statistics
+    logging.info(f"Training with {config.data_percentage*100}% of data")
+    logging.info(f"K-shot: {config.k_shot}, N-query (training): {config.n_query}")
+    logging.info(f"Evaluation N-query: {config.eval_n_query}")
 
     # Create episode generators
     train_episodes = EpisodeGenerator(train_dataset, config, mode='train')
     val_episodes = EpisodeGenerator(val_dataset, config, mode='val')
+    test_episodes = EpisodeGenerator(test_dataset, config, mode='val')
 
     # Create dataloaders
-    train_loader = DataLoader(
-        train_episodes,
-        batch_size=config.batch_size,
+    train_loader = DataLoader(train_episodes, batch_size=config.batch_size,
+                            num_workers=config.num_workers, shuffle=True)
+    val_loader = DataLoader(val_episodes, batch_size=config.batch_size,
+                          num_workers=config.num_workers)
+    test_loader = DataLoader(test_episodes, batch_size=config.batch_size,
+                           num_workers=config.num_workers)
+
+    # Log actual episode sizes after adjustments
+    logging.info(f"Actual training query size: {train_episodes.n_query}")
+    logging.info(f"Actual validation query size: {val_episodes.n_query}")
+    logging.info(f"Number of valid classes - Train: {len(train_episodes.valid_classes)}")
+
+    # Create evaluation loaders for validation and test sets
+    val_eval_loader = DataLoader(
+        val_dataset,
+        batch_size=1,
         num_workers=config.num_workers,
-        pin_memory=True
-    )
-    val_loader = DataLoader(
-        val_episodes,
-        batch_size=config.batch_size,
-        num_workers=config.num_workers,
-        pin_memory=True
+        shuffle=False
     )
 
-    # Initialize model
+    test_eval_loader = DataLoader(
+        test_dataset,
+        batch_size=1,
+        num_workers=config.num_workers,
+        shuffle=False
+    )
+
+    # Initialize model and training components
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     model = PrototypicalNetwork(config).to(device)
-
-    # Initialize criterion
     criterion = get_criterion(config)
+    optimizer = optim.AdamW(model.parameters(), lr=config.learning_rate)
+    scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=config.num_epochs)
 
-    # Initialize optimizer
-    if config.optimizer == "adamw":
-        optimizer = optim.AdamW(
-            model.parameters(),
-            lr=config.learning_rate,
-            weight_decay=config.weight_decay
-        )
-
-    # Initialize scheduler
-    if config.scheduler == "cosine":
-        scheduler = optim.lr_scheduler.CosineAnnealingLR(
-            optimizer,
-            T_max=config.num_epochs
-        )
-
-    # Early stopping parameters
-    patience = 10
     best_val_acc = 0
     counter = 0
 
-    # Create save directory
-    save_dir = os.path.join('saved_models', config.experiment_name)
-    os.makedirs(save_dir, exist_ok=True)
-
     # Training loop
     for epoch in range(config.num_epochs):
-        # Train
+        # Episodic training
         train_loss, train_acc = train_epoch(
             model, train_loader, optimizer, criterion, config, device)
 
-        # Validate
-        val_loss, val_acc = validate(
-            model, val_loader, criterion, config, device)
-
-        # Update scheduler
-        scheduler.step()
+        # Evaluate on full 102-way classification
+        val_acc_full = model.evaluate(
+            val_eval_loader,
+            train_dataset,
+            shots_per_class=config.k_shot
+        )
 
         # Log metrics
         wandb.log({
             'epoch': epoch,
             'train_loss': train_loss,
-            'train_acc': train_acc,
-            'val_loss': val_loss,
-            'val_acc': val_acc,
+            'train_acc_episode': train_acc,
+            'val_acc_full': val_acc_full,
             'lr': optimizer.param_groups[0]['lr']
         })
 
-        # Early stopping check
-        if val_acc > best_val_acc:
-            best_val_acc = val_acc
+        # Update scheduler
+        scheduler.step()
+
+        # Early stopping and model saving
+        if val_acc_full > best_val_acc:
+            best_val_acc = val_acc_full
             counter = 0
-            save_path = os.path.join(save_dir, f'best_model_{timestamp}.pth')
+            save_path = os.path.join(config.save_dir, f'best_model_{timestamp}.pth')
             torch.save({
                 'epoch': epoch,
                 'model_state_dict': model.state_dict(),
                 'optimizer_state_dict': optimizer.state_dict(),
-                'val_acc': val_acc,
+                'val_acc': val_acc_full,
                 'config': config
             }, save_path)
-            wandb.save(save_path)
-            logging.info(f"Saved best model to {save_path}")
+            logging.info(f"Saved best model with validation accuracy: {val_acc_full:.2f}%")
         else:
             counter += 1
-            if counter >= patience:
-                logging.info(f"Early stopping triggered after {epoch} epochs")
+            if counter >= config.patience:
+                logging.info("Early stopping triggered")
                 break
 
-        logging.info(f"Epoch {epoch}: Train Acc: {train_acc:.4f}, Val Acc: {val_acc:.4f}")
+    # Final evaluation
+    model.load_state_dict(torch.load(save_path)['model_state_dict'])
+    test_acc = model.evaluate(
+        test_eval_loader,
+        train_dataset,
+        shots_per_class=config.k_shot
+    )
+    logging.info(f"Final Test Accuracy: {test_acc:.2f}%")
 
 if __name__ == '__main__':
     main()

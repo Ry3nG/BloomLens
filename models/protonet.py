@@ -3,6 +3,7 @@ import torch.nn as nn
 import timm
 from .attention import TaskAttention, SelfAttention
 import torch.nn.functional as F
+from torch.utils.data import DataLoader
 
 class PrototypicalNetwork(nn.Module):
     """
@@ -29,6 +30,8 @@ class PrototypicalNetwork(nn.Module):
             config (object): Configuration object with model settings.
         """
         super().__init__()
+        # Add device initialization
+        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         self.config = config
 
         # Initialize backbone
@@ -159,3 +162,76 @@ class PrototypicalNetwork(nn.Module):
         else:  # cosine
             logits = torch.matmul(query_features, prototypes.t()) * self.config.temperature
         return logits
+
+    # Add new methods for full-way inference
+    def build_full_classifier(self, train_loader, shots_per_class=None):
+        """
+        Build a full 102-way classifier using training examples.
+
+        Args:
+            train_loader: DataLoader for training data (with transforms)
+            shots_per_class: Number of shots per class (None for all available)
+        """
+        self.eval()
+        class_features = {}
+
+        with torch.no_grad():
+            for images, labels in train_loader:
+                images = images.to(self.device)
+                features = self.forward_features(images)
+
+                for feature, label in zip(features, labels):
+                    if label.item() not in class_features:
+                        class_features[label.item()] = []
+                    if shots_per_class is None or len(class_features[label.item()]) < shots_per_class:
+                        class_features[label.item()].append(feature)
+
+        # Compute prototype for each class
+        prototypes = torch.zeros(102, self.config.embedding_dim).to(self.device)
+        for class_idx in range(102):
+            if class_idx in class_features and class_features[class_idx]:
+                class_feat = torch.stack(class_features[class_idx])
+                if self.config.use_task_attention:
+                    weights = self.task_attention(class_feat, class_feat)
+                    prototypes[class_idx] = (class_feat * weights).sum(0)
+                else:
+                    prototypes[class_idx] = class_feat.mean(0)
+
+        return F.normalize(prototypes, dim=-1)
+
+    def inference(self, images, prototypes):
+        """Perform inference using pre-computed prototypes."""
+        query_features = self.forward_features(images)
+        return self.compute_logits(query_features, prototypes)
+
+    def evaluate(self, test_loader, train_dataset, shots_per_class=None):
+        """
+        Evaluate the model on the test set.
+
+        Args:
+            test_loader: DataLoader for test set
+            train_dataset: Training dataset (must have transforms applied)
+            shots_per_class: Number of shots per class (None for all available)
+        """
+        self.eval()
+        # Create a DataLoader with the transforms from test_loader
+        train_loader = DataLoader(
+            train_dataset,
+            batch_size=32,
+            num_workers=4,
+            shuffle=True
+        )
+        prototypes = self.build_full_classifier(train_loader, shots_per_class)
+
+        correct = 0
+        total = 0
+
+        with torch.no_grad():
+            for images, labels in test_loader:
+                images, labels = images.to(self.device), labels.to(self.device)
+                logits = self.inference(images, prototypes)
+                _, predicted = torch.max(logits, 1)
+                total += labels.size(0)
+                correct += (predicted == labels).sum().item()
+
+        return 100 * correct / total

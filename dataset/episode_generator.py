@@ -21,7 +21,6 @@ class EpisodeGenerator(Dataset):
         n_query (int): Number of query examples per class.
         class_images (dict): A dictionary mapping class labels to image indices.
         classes (list): List of all available class labels.
-        transform (T.Compose): Composition of image transformations for data augmentation.
     """
 
     def __init__(self, dataset, config, mode='train'):
@@ -38,7 +37,6 @@ class EpisodeGenerator(Dataset):
         self.mode = mode
         self.n_way = config.n_way
         self.k_shot = config.k_shot
-        self.n_query = config.n_query
 
         # Group images by class
         self.class_images = {}
@@ -47,6 +45,16 @@ class EpisodeGenerator(Dataset):
             if label not in self.class_images:
                 self.class_images[label] = []
             self.class_images[label].append(idx)
+
+        # Add new data reduction logic
+        if mode == 'train' and hasattr(config, 'data_percentage') and config.data_percentage < 1.0:
+            self._reduce_dataset()
+            print(f"Using {config.data_percentage*100}% of training data")
+
+        # Dynamically adjust n_query based on available samples
+        min_samples_per_class = min(len(imgs) for imgs in self.class_images.values())
+        self.n_query = min(config.n_query, min_samples_per_class - self.k_shot)
+        print(f"Adjusted query size to {self.n_query} based on available data")
 
         # Filter out classes that don't have enough samples
         min_samples_required = self.k_shot + self.n_query
@@ -58,29 +66,23 @@ class EpisodeGenerator(Dataset):
         if not self.valid_classes:
             raise ValueError(
                 f"No classes have enough samples for {self.k_shot}-shot "
-                f"with {self.n_query} query images"
+                f"with {self.n_query} query images after data reduction"
             )
 
         print(f"Number of valid classes: {len(self.valid_classes)}")
+        print(f"Samples per class after reduction: {min_samples_per_class}")
 
-        # Data augmentation
-        if mode == 'train':
-            self.transform = T.Compose([
-                T.RandomResizedCrop(config.image_size),
-                T.RandomHorizontalFlip(),
-                T.ColorJitter(0.1, 0.1, 0.1),
-                T.ToTensor(),
-                T.Normalize(mean=[0.485, 0.456, 0.406],
-                           std=[0.229, 0.224, 0.225])
-            ])
-        else:
-            self.transform = T.Compose([
-                T.Resize(int(config.image_size * 1.14)),
-                T.CenterCrop(config.image_size),
-                T.ToTensor(),
-                T.Normalize(mean=[0.485, 0.456, 0.406],
-                           std=[0.229, 0.224, 0.225])
-            ])
+    def _reduce_dataset(self):
+        """Reduce the dataset while maintaining class balance"""
+        for label in self.class_images:
+            indices = self.class_images[label]
+            num_samples = len(indices)
+            num_keep = max(1, int(num_samples * self.config.data_percentage))
+            self.class_images[label] = np.random.choice(
+                indices, num_keep, replace=False).tolist()
+
+        total_samples = sum(len(indices) for indices in self.class_images.values())
+        print(f"Reduced dataset size: {total_samples} images")
 
     def __len__(self):
         """
@@ -141,9 +143,7 @@ class EpisodeGenerator(Dataset):
 
             # Split into support and query
             for i, img_idx in enumerate(selected_images):
-                img, _ = self.dataset[img_idx]
-                img = self.transform(img)
-
+                img, _ = self.dataset[img_idx]  # Image is already transformed
                 if i < self.k_shot:
                     support_images.append(img)
                     support_labels.append(label_idx)
