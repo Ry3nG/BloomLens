@@ -1,6 +1,9 @@
 # ignore the dataset
 data/
 
+#ignore wandb
+wandb/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
