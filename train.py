@@ -12,7 +12,7 @@ import argparse
 import torchvision.transforms as T
 
 from config import Config
-from models.protonet import PrototypicalNetwork
+from models.protonet_with_deform_conv import PrototypicalNetwork
 from dataset.episode_generator import EpisodeGenerator, mixup_episode
 
 def parse_args():

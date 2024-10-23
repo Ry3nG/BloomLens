@@ -79,6 +79,11 @@ class Config:
         self.data_percentage = 1.0
         self.min_samples_per_class = 1  # Minimum samples required per class
 
+        # Deformable Convolution Configuration
+        self.num_deform_layers = 1
+        self.use_deform_conv = True
+        self.deform_kernel_size = 3
+
     def _post_init(self):
         """Validate and process configuration after initialization."""
         if self.data_percentage != 1.0:
