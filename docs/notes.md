@@ -56,3 +56,45 @@ Key observations:
 - GoogleNet shows a dramatic drop in performance with smaller dataset sizes.
 
 This baseline performance provides a good starting point for further model optimization and fine-tuning.
+
+
+# Experimental Design Strategy
+
+## Proposed Comparison Approach
+
+### CopyBloomLens (Proposed Model)
+- Train with **50% of training data**
+- Leverages meta-learning/episodic approach
+- Goal: Demonstrate efficient feature learning with limited data
+
+### Baseline Models
+- Train with **100% of training data**
+- Standard training approach
+- Uses full available dataset
+
+## Rationale for Comparison Strategy
+1. **Data Efficiency Demonstration:**
+   - If BloomLens matches/exceeds baselines while using less data, it validates the meta-learning approach
+   - Proves model's ability to learn efficiently from limited samples
+
+2. **Experimental Fairness:**
+   - Giving baselines more data strengthens the comparison
+   - Makes any positive results more convincing
+
+3. **Real-world Application:**
+   - Demonstrates practical value of doing more with less data
+   - Relevant for scenarios with limited data availability
+
+## Proposed Experimental Structure
+1. **Baseline Models:** Train with 100% data (current baseline results)
+2. **BloomLens-50:** Train with 50% data
+3. **BloomLens-25:** Train with 25% data
+
+This structure will enable statements like:
+- "Our model achieves X% accuracy using only 50% of the training data"
+- "This matches/exceeds baseline models trained on the full dataset"
+
+## Implementation Notes
+- Keep existing baseline_comparison.py for full-data baseline evaluations
+- Add reduced-data training option for BloomLens
+- Run comprehensive experiments with different data reduction ratios

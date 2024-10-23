@@ -9,6 +9,7 @@ import random
 import os
 import logging
 from datetime import datetime
+from collections import defaultdict
 
 # Set up logging
 log_dir = 'log'
@@ -31,6 +32,16 @@ logging.info(f"Using device: {device}")
 # Define transforms
 transform = transforms.Compose([
     transforms.Resize((224, 224)),
+    transforms.RandomHorizontalFlip(),  # Data augmentation
+    transforms.RandomRotation(15),
+    transforms.ColorJitter(0.1, 0.1, 0.1, 0.1),
+    transforms.ToTensor(),
+    transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                         std=[0.229, 0.224, 0.225])
+])
+
+test_transform = transforms.Compose([
+    transforms.Resize((224, 224)),
     transforms.ToTensor(),
     transforms.Normalize(mean=[0.485, 0.456, 0.406],
                          std=[0.229, 0.224, 0.225])
@@ -39,25 +50,32 @@ transform = transforms.Compose([
 # Load the dataset with official splits
 root_dir = './data/flowers102'
 train_dataset = datasets.Flowers102(root=root_dir, split='train', transform=transform, download=True)
-val_dataset = datasets.Flowers102(root=root_dir, split='val', transform=transform, download=True)
-test_dataset = datasets.Flowers102(root=root_dir, split='test', transform=transform, download=True)
+val_dataset = datasets.Flowers102(root=root_dir, split='val', transform=test_transform, download=True)
+test_dataset = datasets.Flowers102(root=root_dir, split='test', transform=test_transform, download=True)
 
-# Function to create reduced dataset
-def create_reduced_dataset(dataset, reduction_percentage):
-    if reduction_percentage >= 1.0:
-        return dataset
-    num_samples = len(dataset)
-    num_reduced_samples = int(num_samples * reduction_percentage)
-    indices = random.sample(range(num_samples), num_reduced_samples)
-    logging.info(f"Created reduced dataset with {num_reduced_samples} samples")
-    return Subset(dataset, indices)
+# Function to create few-shot dataset
+def create_few_shot_dataset(dataset, k_shot):
+    class_to_indices = defaultdict(list)
+    for idx, (_, label) in enumerate(dataset):
+        class_to_indices[label].append(idx)
 
-# Define dataset sizes
-dataset_sizes = {
-    '100%': 1.0,
-    '50%': 0.5,
-    '25%': 0.25,
-    '10%': 0.10
+    selected_indices = []
+    for label, indices in class_to_indices.items():
+        if len(indices) >= k_shot:
+            selected_indices.extend(random.sample(indices, k_shot))
+        else:
+            logging.warning(f"Class {label} has less than {k_shot} samples. Using all available samples.")
+            selected_indices.extend(indices)
+
+    logging.info(f"Created {k_shot}-shot dataset with {len(selected_indices)} samples.")
+    return Subset(dataset, selected_indices)
+
+# Define few-shot settings
+few_shot_settings = {
+    '1-shot': 1,
+    '5-shot': 5,
+    '10-shot': 10,
+    'full-data': None  # Use all available data
 }
 
 # Define models to compare
@@ -70,7 +88,6 @@ model_names = [
     'resnet101',
     'densenet121',
     'densenet201',
-    'shufflenet_v2_x1_0',
     'mobilenet_v2',
     'googlenet'
 ]
@@ -101,17 +118,15 @@ def get_model(model_name, num_classes=102):
     elif model_name == 'densenet201':
         model = models.densenet201(pretrained=True)
         model.classifier = nn.Linear(model.classifier.in_features, num_classes)
-    elif model_name == 'shufflenet_v2_x1_0':
-        model = models.shufflenet_v2_x1_0(pretrained=True)
-        model.fc = nn.Linear(model.fc.in_features, num_classes)
     elif model_name == 'mobilenet_v2':
-        model = models.mobilenet_v2(pretrained=True)
-        model.classifier[1] = nn.Linear(model.classifier[1].in_features, num_classes)
+        model = models.mobilenet_v2(weights='IMAGENET1K_V1')
+        # MobileNetV2's classifier is simpler - it only has one linear layer
+        model.classifier = nn.Sequential(
+            nn.Dropout(p=0.2),
+            nn.Linear(model.last_channel, num_classes)
+        )
     elif model_name == 'googlenet':
         model = models.googlenet(pretrained=True)
-        if model.aux1:
-            model.aux1.fc2 = nn.Linear(model.aux1.fc2.in_features, num_classes)
-            model.aux2.fc2 = nn.Linear(model.aux2.fc2.in_features, num_classes)
         model.fc = nn.Linear(model.fc.in_features, num_classes)
     else:
         raise ValueError(f"Model {model_name} is not supported.")
@@ -128,22 +143,21 @@ def calculate_accuracy(loader, model):
         for images, labels in loader:
             images, labels = images.to(device), labels.to(device)
             outputs = model(images)
-            if isinstance(outputs, tuple):  # For GoogLeNet which has auxiliary outputs
+            if isinstance(outputs, tuple):  # For models with multiple outputs
                 outputs = outputs[0]
             _, predicted = torch.max(outputs.data, 1)
             total += labels.size(0)
             correct += (predicted == labels).sum().item()
     accuracy = 100 * correct / total
-    logging.info(f"Calculated accuracy: {accuracy:.2f}%")
     return accuracy
 
 # Function to train and evaluate a model
-def train_and_evaluate(model, train_loader, val_loader, test_loader, num_epochs=10, learning_rate=0.001):
+def train_and_evaluate(model, train_loader, val_loader, test_loader, num_epochs=100, learning_rate=0.001):
     criterion = nn.CrossEntropyLoss()
-    optimizer = optim.SGD(model.parameters(), lr=learning_rate, momentum=0.9)
+    optimizer = optim.Adam(model.parameters(), lr=learning_rate)
 
     best_val_accuracy = 0
-    patience = 10
+    patience = 5
     counter = 0
     best_model = None
 
@@ -151,19 +165,16 @@ def train_and_evaluate(model, train_loader, val_loader, test_loader, num_epochs=
         model.train()
         running_loss = 0.0
 
-        for images, labels in tqdm(train_loader, desc=f"Training Epoch {epoch + 1}/{num_epochs}"):
+        for images, labels in tqdm(train_loader, desc=f"Training Epoch {epoch + 1}/{num_epochs}", leave=False):
             images, labels = images.to(device), labels.to(device)
 
             optimizer.zero_grad()
-
             outputs = model(images)
-            if isinstance(outputs, tuple):  # For GoogLeNet
+            if isinstance(outputs, tuple):
                 outputs = outputs[0]
             loss = criterion(outputs, labels)
-
             loss.backward()
             optimizer.step()
-
             running_loss += loss.item()
 
         avg_loss = running_loss / len(train_loader)
@@ -187,6 +198,7 @@ def train_and_evaluate(model, train_loader, val_loader, test_loader, num_epochs=
 
     # Evaluate on test set
     test_accuracy = calculate_accuracy(test_loader, model)
+    logging.info(f"Test Accuracy: {test_accuracy:.2f}%")
     return test_accuracy
 
 # Prepare a directory to save results
@@ -194,53 +206,51 @@ results_dir = 'results'
 os.makedirs(results_dir, exist_ok=True)
 
 # Initialize a dictionary to store results
-results = {size: {} for size in dataset_sizes.keys()}
+results = {setting: {} for setting in few_shot_settings.keys()}
 
-# Iterate over dataset sizes
-for size_name, reduction in dataset_sizes.items():
-    logging.info(f"\n=== Dataset Size: {size_name} ({int(reduction*100)}%) ===")
+# Iterate over few-shot settings
+for setting_name, k_shot in few_shot_settings.items():
+    logging.info(f"\n=== Few-Shot Setting: {setting_name} ===")
 
-    # Create reduced datasets
-    reduced_train = create_reduced_dataset(train_dataset, reduction)
-    reduced_val = create_reduced_dataset(val_dataset, reduction)
-    reduced_test = create_reduced_dataset(test_dataset, reduction)
+    # Create few-shot datasets
+    if k_shot is not None:
+        few_shot_train = create_few_shot_dataset(train_dataset, k_shot)
+    else:
+        few_shot_train = train_dataset  # Use full training data
 
-    # Create data loaders
-    batch_size = 64
-    train_loader = DataLoader(reduced_train, batch_size=batch_size, shuffle=True)
-    val_loader = DataLoader(reduced_val, batch_size=batch_size, shuffle=False)
-    test_loader = DataLoader(reduced_test, batch_size=batch_size, shuffle=False)
+    # Use the entire validation and test sets
+    val_loader = DataLoader(val_dataset, batch_size=64, shuffle=False, num_workers=4)
+    test_loader = DataLoader(test_dataset, batch_size=64, shuffle=False, num_workers=4)
+
+    # Create data loader for training
+    train_loader = DataLoader(few_shot_train, batch_size=32, shuffle=True, num_workers=4)
 
     # Iterate over models
     for model_name in model_names:
-        logging.info(f"\nTraining model: {model_name}")
+        logging.info(f"\nTraining model: {model_name} with {setting_name}")
         model = get_model(model_name)
 
-        test_acc = train_and_evaluate(model, train_loader, val_loader, test_loader, num_epochs=100, learning_rate=0.001)
-        logging.info(f"Test Accuracy for {model_name} with {size_name} data: {test_acc:.2f}%")
+        test_acc = train_and_evaluate(model, train_loader, val_loader, test_loader, num_epochs=50, learning_rate=0.0001)
+        logging.info(f"Test Accuracy for {model_name} with {setting_name}: {test_acc:.2f}%")
 
         # Store the result
-        results[size_name][model_name] = test_acc
-
-        # Optionally, save the model
-        # model_path = os.path.join(results_dir, f"{model_name}_{size_name}.pth")
-        # torch.save(model.state_dict(), model_path)
+        results[setting_name][model_name] = test_acc
 
 # Convert results to DataFrames and save as CSV
-for size_name in dataset_sizes.keys():
-    df = pd.DataFrame(list(results[size_name].items()), columns=['Model', 'Test Accuracy (%)'])
-    csv_path = os.path.join(results_dir, f"performance_{size_name}_{timestamp}.csv")
+for setting_name in few_shot_settings.keys():
+    df = pd.DataFrame(list(results[setting_name].items()), columns=['Model', 'Test Accuracy (%)'])
+    csv_path = os.path.join(results_dir, f"performance_{setting_name}_{timestamp}.csv")
     df.to_csv(csv_path, index=False)
-    logging.info(f"\nSaved performance table for {size_name} dataset to {csv_path}")
+    logging.info(f"\nSaved performance table for {setting_name} to {csv_path}")
 
 # Optionally, create a single CSV with all results
 all_results = []
-for size_name, models in results.items():
+for setting_name, models in results.items():
     for model_name, acc in models.items():
-        all_results.append({'Dataset Size': size_name, 'Model': model_name, 'Test Accuracy (%)': acc})
+        all_results.append({'Few-Shot Setting': setting_name, 'Model': model_name, 'Test Accuracy (%)': acc})
 
 all_df = pd.DataFrame(all_results)
-all_csv_path = os.path.join(results_dir, f"performance_all_sizes_{timestamp}.csv")
+all_csv_path = os.path.join(results_dir, f"performance_all_settings_{timestamp}.csv")
 all_df.to_csv(all_csv_path, index=False)
 logging.info(f"\nSaved all performance results to {all_csv_path}")
 
@@ -249,13 +259,13 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 
 # Create a pivot table for visualization
-pivot_df = all_df.pivot(index='Model', columns='Dataset Size', values='Test Accuracy (%)')
+pivot_df = all_df.pivot(index='Model', columns='Few-Shot Setting', values='Test Accuracy (%)')
 
 plt.figure(figsize=(12, 8))
 sns.heatmap(pivot_df, annot=True, fmt=".2f", cmap="YlGnBu")
-plt.title("Model Performance on Flowers102 Dataset")
+plt.title("Model Performance on Flowers102 Dataset Under Few-Shot Settings")
 plt.ylabel("Model")
-plt.xlabel("Dataset Size")
+plt.xlabel("Few-Shot Setting")
 plt.tight_layout()
 plt_path = os.path.join(results_dir, f"performance_heatmap_{timestamp}.png")
 plt.savefig(plt_path)
