@@ -33,68 +33,36 @@ The Flowers102 dataset is a comprehensive collection of flower images designed f
    - Suitable for developing robust flower classification models
 
 5. **Baseline Model Performance:**
-
-The following tables summarize the test accuracy (%) of various models trained on different dataset sizes:
-
-| Model         | 100% Dataset | 50% Dataset | 25% Dataset | 10% Dataset |
-|---------------|--------------|-------------|-------------|-------------|
-| alexnet       | 73.96        | 59.89       | 43.72       | 24.27       |
-| vgg16         | 81.43        | 66.10       | 48.60       | 26.71       |
-| vgg19         | 76.71        | 66.33       | 45.80       | 27.52       |
-| resnet18      | 82.06        | 63.31       | 42.03       | 16.94       |
-| resnet50      | 85.98        | 71.76       | 49.32       | 27.52       |
-| resnet101     | 84.99        | 69.23       | 46.06       | 24.76       |
-| densenet121   | 86.94        | 70.43       | 48.28       | 27.36       |
-| densenet201   | 88.99        | 73.52       | 47.17       | 22.15       |
-| mobilenet_v2  | 86.19        | 73.91       | 49.25       | 19.06       |
-| googlenet     | 81.92        | 63.21       | 37.35       | 2.93        |
-
-Key observations:
-- DenseNet201 achieves the highest accuracy (88.99%) when trained on the full dataset.
-- Performance generally decreases as the dataset size is reduced, as expected.
-- Some models (e.g., ResNet50, MobileNetV2) maintain relatively good performance even with reduced data.
-- GoogleNet shows a dramatic drop in performance with smaller dataset sizes.
-
-This baseline performance provides a good starting point for further model optimization and fine-tuning.
+no pretrained (11/07 update)
+| Model     | N-way | K-shot | Accuracy (%) | 95% CI (±) |
+|-----------|--------|---------|--------------|------------|
+| ResNet-50 | 5      | 1       | 52.52       | 2.98       |
+| ResNet-50 | 5      | 5       | 65.24       | 2.54       |
+| ResNet-50 | 5      | 8       | 66.30       | 3.32       |
+| ResNet-50 | 10     | 1       | 49.00       | 1.81       |
+| ResNet-50 | 10     | 5       | 53.30       | 2.15       |
+| ResNet-50 | 10     | 8       | 56.50       | 2.53       |
+| ResNet-50 | 20     | 1       | 26.93      | 0.99       |
+| ResNet-50 | 20     | 5       | 37.91       | 1.11       |
+| ResNet-50 | 20     | 8       | 41.47       | 1.81       |
 
 
-# Experimental Design Strategy
+# Custom Combined Dataset
+Training set: 5752 images
+Validation set: 1391 images
+Test set: 1046 images
 
-## Proposed Comparison Approach
+Training classes: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 19, 20, 21, 22, 23, 25, 27, 28, 29, 30, 31, 33, 34, 35, 36, 37, 40, 45, 47, 49, 50, 52, 53, 54, 55, 58, 59, 60, 61, 62, 63, 64, 65, 67, 68, 69, 75, 76, 77, 78, 80, 81, 82, 83, 84, 87, 88, 90, 92, 93, 95, 97, 98, 99, 101]
+Average images per class (train): 81.0
+Min images per class (train): 40
+Max images per class (train): 258
 
-### CopyBloomLens (Proposed Model)
-- Train with **50% of training data**
-- Leverages meta-learning/episodic approach
-- Goal: Demonstrate efficient feature learning with limited data
+Validation classes: [17, 24, 32, 41, 42, 43, 51, 56, 66, 72, 73, 79, 89, 94, 96]
+Average images per class (val): 92.7
+Min images per class (val): 41
+Max images per class (val): 194
 
-### Baseline Models
-- Train with **100% of training data**
-- Standard training approach
-- Uses full available dataset
-
-## Rationale for Comparison Strategy
-1. **Data Efficiency Demonstration:**
-   - If BloomLens matches/exceeds baselines while using less data, it validates the meta-learning approach
-   - Proves model's ability to learn efficiently from limited samples
-
-2. **Experimental Fairness:**
-   - Giving baselines more data strengthens the comparison
-   - Makes any positive results more convincing
-
-3. **Real-world Application:**
-   - Demonstrates practical value of doing more with less data
-   - Relevant for scenarios with limited data availability
-
-## Proposed Experimental Structure
-1. **Baseline Models:** Train with 100% data (current baseline results)
-2. **BloomLens-50:** Train with 50% data
-3. **BloomLens-25:** Train with 25% data
-
-This structure will enable statements like:
-- "Our model achieves X% accuracy using only 50% of the training data"
-- "This matches/exceeds baseline models trained on the full dataset"
-
-## Implementation Notes
-- Keep existing baseline_comparison.py for full-data baseline evaluations
-- Add reduced-data training option for BloomLens
-- Run comprehensive experiments with different data reduction ratios
+Test classes: [0, 18, 26, 38, 39, 44, 46, 48, 57, 70, 71, 74, 85, 86, 91, 100]
+Average images per class (test): 65.4
+Min images per class (test): 40
+Max images per class (test): 120
