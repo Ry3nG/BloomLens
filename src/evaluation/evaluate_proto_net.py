@@ -1,129 +1,188 @@
-# src/evaluation/evaluate_proto_net.py
-import sys
-import os
-
-sys.path.append(
-    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-)
-
+# evaluate_proto_net.py
 
 import torch  # type: ignore
-from torch.utils.data import DataLoader  # type: ignore
+import torch.nn as nn  # type: ignore
+import torchvision.transforms as transforms  # type: ignore
+from torchvision.datasets import Flowers102  # type: ignore
+from torch.utils.data import Dataset  # type: ignore
+import numpy as np  # type: ignore
+import random
+from tqdm import tqdm  # type: ignore
+import os
+import matplotlib.pyplot as plt  # type: ignore
+from typing import Dict, Tuple, List
+import json
+import sys
+from pathlib import Path
+
+sys.path.append(str(Path(__file__).parent.parent.parent))
+
+
 from src.models.prototypical_network import (
     PrototypicalNetwork,
     compute_prototypes,
+    prototypical_loss,
 )
-from src.data.dataset import MappedSubset, split_dataset
-from torchvision.datasets import Flowers102  # type: ignore
-from torchvision import transforms  # type: ignore
-import random  # type: ignore
-import numpy as np  # type: ignore
-from tqdm import tqdm  # type: ignore
 
 
-def evaluate_prototypical_network(
-    model, test_dataset, device, n_way=5, k_shot=5, q_queries=5, n_episodes=100
-):
+class EpisodeSampler:
+    def __init__(self, dataset, n_way, k_shot, n_query):
+        self.dataset = dataset
+        self.n_way = n_way
+        self.k_shot = k_shot
+        self.n_query = n_query
+
+        # Group samples by label
+        self.label_to_indices = {}
+        for idx, (_, label) in enumerate(dataset):
+            if label not in self.label_to_indices:
+                self.label_to_indices[label] = []
+            self.label_to_indices[label].append(idx)
+
+        self.labels = list(self.label_to_indices.keys())
+
+        # Remove minimum samples per class requirement
+        if len(self.labels) < n_way:
+            raise ValueError(
+                f"Not enough classes. Found {len(self.labels)}, need {n_way}"
+            )
+
+    def sample_episode(self):
+        # Randomly select n_way classes
+        episode_classes = random.sample(self.labels, self.n_way)
+
+        support_images = []
+        support_labels = []
+        query_images = []
+        query_labels = []
+
+        for class_label in episode_classes:
+            # Allow resampling of indices
+            class_indices = self.label_to_indices[class_label]
+
+            # Sample with replacement if needed
+            support_idx = np.random.choice(
+                class_indices, size=self.k_shot, replace=True
+            )
+            query_idx = np.random.choice(class_indices, size=self.n_query, replace=True)
+
+            for idx in support_idx:
+                img, _ = self.dataset[idx]
+                support_images.append(img)
+                support_labels.append(episode_classes.index(class_label))
+
+            for idx in query_idx:
+                img, _ = self.dataset[idx]
+                query_images.append(img)
+                query_labels.append(episode_classes.index(class_label))
+
+        support_images = torch.stack(support_images)
+        support_labels = torch.tensor(support_labels)
+        query_images = torch.stack(query_images)
+        query_labels = torch.tensor(query_labels)
+
+        return {
+            "support_images": support_images,
+            "support_labels": support_labels,
+            "query_images": query_images,
+            "query_labels": query_labels,
+        }
+
+
+# Define MappedSubset class and split_dataset function
+class MappedSubset(Dataset):
+    """Custom Dataset that applies class mapping"""
+
+    def __init__(self, dataset, indices, class_to_idx):
+        self.dataset = dataset
+        self.indices = indices
+        self.class_to_idx = class_to_idx
+
+    def __getitem__(self, idx):
+        image, label = self.dataset[self.indices[idx]]
+        mapped_label = self.class_to_idx[label]
+        return image, mapped_label
+
+    def __len__(self):
+        return len(self.indices)
+
+
+def split_dataset(dataset):
+    """Split dataset into train and test sets based on classes"""
+    all_classes = list(range(102))
+    random.shuffle(all_classes)
+
+    train_classes = all_classes[:60]
+    test_classes = all_classes[60:]
+
+    train_indices = []
+    test_indices = []
+
+    for idx, (_, label) in enumerate(dataset):
+        if label in train_classes:
+            train_indices.append(idx)
+        else:
+            test_indices.append(idx)
+
+    train_class_to_idx = {label: idx for idx, label in enumerate(sorted(train_classes))}
+    test_class_to_idx = {label: idx for idx, label in enumerate(sorted(test_classes))}
+
+    return (
+        (train_indices, test_indices),
+        (train_class_to_idx, test_class_to_idx),
+        (train_classes, test_classes),
+    )
+
+
+def evaluate_on_test(model, test_sampler, device, n_episodes=100):
+    """Evaluate model on test set"""
     model.eval()
+    total_acc = 0
     accuracies = []
 
-    for _ in tqdm(range(n_episodes), desc="Evaluating episodes"):
-        # Sample an episode
-        episode_classes = random.sample(list(test_dataset.class_to_idx.values()), n_way)
-        support_indices = []
-        query_indices = []
+    with torch.no_grad():
+        for _ in tqdm(range(n_episodes), desc="Test Evaluation"):
+            batch = test_sampler.sample_episode()
 
-        for cls in episode_classes:
-            cls_indices = [
-                idx for idx, (_, label) in enumerate(test_dataset) if label == cls
-            ]
-            if len(cls_indices) < k_shot + q_queries:
-                # Not enough samples in this class, skip this episode
-                break
-            selected = random.sample(cls_indices, k_shot + q_queries)
-            support_indices.extend(selected[:k_shot])
-            query_indices.extend(selected[k_shot:])
+            support_images = batch["support_images"].to(device)
+            support_labels = batch["support_labels"].to(device)
+            query_images = batch["query_images"].to(device)
+            query_labels = batch["query_labels"].to(device)
 
-        if (
-            len(support_indices) != n_way * k_shot
-            or len(query_indices) != n_way * q_queries
-        ):
-            continue  # Skip this episode if not enough samples
+            support_features = model(support_images)
+            query_features = model(query_images)
+            prototypes = compute_prototypes(support_features, support_labels)
+            _, acc = prototypical_loss(
+                prototypes, query_features, query_labels, temperature=0.5
+            )
 
-        # Create a mapping from original class labels to episode class labels (0 to n_way-1)
-        class_mapping = {cls: i for i, cls in enumerate(episode_classes)}
+            accuracies.append(acc.item())
+            total_acc += acc.item()
 
-        # Get support and query samples
-        support_set = torch.utils.data.Subset(test_dataset, support_indices)
-        query_set = torch.utils.data.Subset(test_dataset, query_indices)
+    mean_acc = total_acc / n_episodes
+    std_acc = np.std(accuracies)
+    ci95 = 1.96 * std_acc / np.sqrt(n_episodes)
 
-        support_loader = DataLoader(
-            support_set, batch_size=k_shot * n_way, shuffle=False
-        )
-        query_loader = DataLoader(
-            query_set, batch_size=q_queries * n_way, shuffle=False
-        )
-
-        support_images, support_labels = next(iter(support_loader))
-        query_images, query_labels = next(iter(query_loader))
-
-        support_images = support_images.to(device)
-        support_labels = support_labels.to(device)
-        query_images = query_images.to(device)
-        query_labels = query_labels.to(device)
-
-        # Map labels to episode-specific labels
-        support_labels = torch.tensor(
-            [class_mapping[label.item()] for label in support_labels]
-        ).to(device)
-        query_labels = torch.tensor(
-            [class_mapping[label.item()] for label in query_labels]
-        ).to(device)
-
-        # Forward pass
-        with torch.no_grad():
-            support_embeddings = model(support_images)
-            query_embeddings = model(query_images)
-
-            # Compute prototypes
-            prototypes = compute_prototypes(support_embeddings, support_labels)
-
-            # Compute distances and predict labels
-            distances = torch.cdist(query_embeddings, prototypes)
-            log_p_y = torch.log_softmax(-distances, dim=1)
-            _, y_hat = log_p_y.max(1)
-
-            # Compute accuracy
-            acc = torch.eq(y_hat, query_labels).float().mean().item()
-            accuracies.append(acc)
-
-    mean_acc = np.mean(accuracies)
-    ci95 = 1.96 * np.std(accuracies) / np.sqrt(len(accuracies))
-    print(
-        f"Accuracy over {len(accuracies)} episodes: {mean_acc*100:.2f}% ± {ci95*100:.2f}%"
-    )
     return mean_acc, ci95, accuracies
 
 
-if __name__ == "__main__":
+def main():
     # Set random seeds
     random.seed(42)
     np.random.seed(42)
     torch.manual_seed(42)
 
+    # Setup device
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
 
     # Data preparation
     transform = transforms.Compose(
         [
-            transforms.Resize(84),
-            transforms.CenterCrop(84),
+            transforms.Resize(256),
+            transforms.CenterCrop(224),
             transforms.ToTensor(),
-            transforms.Normalize(
-                mean=[0.485, 0.456, 0.406],  # Using ImageNet statistics
-                std=[0.229, 0.224, 0.225],
-            ),
+            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
         ]
     )
 
@@ -134,56 +193,62 @@ if __name__ == "__main__":
     # Split dataset
     print("Splitting dataset...")
     (
-        (train_indices, val_indices, test_indices),
-        (train_mapping, val_mapping, test_mapping),
-        (train_classes, val_classes, test_classes),
+        (train_indices, test_indices),
+        (train_mapping, test_mapping),
+        (train_classes, test_classes),
     ) = split_dataset(dataset)
 
-    # Create mapped test dataset
+    # Create mapped datasets
     test_dataset = MappedSubset(dataset, test_indices, test_mapping)
 
-    # Load model
-    model = PrototypicalNetwork().to(device)
-    checkpoint = torch.load(
-        "/home/zrgong/BloomLens/results/checkpoints/stage_3/best_model.pt"
-    )
-    model.load_state_dict(
-        checkpoint["model_state_dict"]
-    )  # Extract just the model state
+    print(f"Number of test classes: {len(test_classes)}")
 
-    # Evaluate the model
-    print("Evaluating Prototypical Network...")
+    # Load the model
+    print("Loading model...")
+    model = PrototypicalNetwork(backbone="resnet50", feature_dim=1024).to(device)
+    checkpoint = torch.load(
+        "/home/zrgong/data/BloomLens/checkpoints/stage_4/best_model.pt"
+    )
+    if isinstance(checkpoint, dict) and "model_state_dict" in checkpoint:
+        model.load_state_dict(checkpoint["model_state_dict"])
+    else:
+        model.load_state_dict(checkpoint)
+    model.eval()
+
+    # Configurations to evaluate
     configs = [
-        (5, 1),  # 5-way 1-shot
-        (5, 5),  # 5-way 5-shot
-        (10, 1),  # 10-way 1-shot
-        (10, 5),  # 10-way 5-shot
-        (20, 1),  # 20-way 1-shot
-        (20, 5),  # 20-way 5-shot
+        (5, 1, 15),  # 5-way-1-shot with 15 queries per class
+        (5, 5, 15),  # 5-way-5-shot with 15 queries per class
+        (10, 1, 10),  # 10-way-1-shot with 10 queries per class
+        (10, 5, 10),  # 10-way-5-shot with 10 queries per class
+        (20, 1, 5),  # 20-way-1-shot with 5 queries per class
+        (20, 5, 5),  # 20-way-5-shot with 5 queries per class
     ]
 
-    results = {}
-    for n_way, k_shot in configs:
-        print(f"\nEvaluating {n_way}-way {k_shot}-shot:")
-        mean_acc, ci95, accuracies = evaluate_prototypical_network(
-            model,
-            test_dataset,
-            device,
-            n_way=n_way,
-            k_shot=k_shot,
-            q_queries=5,
-            n_episodes=100,
-        )
-        results[(n_way, k_shot)] = {
-            "mean_acc": mean_acc,
-            "ci95": ci95,
-            "accuracies": accuracies,
-        }
-        print(f"Accuracy: {mean_acc*100:.2f}% ± {ci95*100:.2f}%")
+    # Open log file
+    os.makedirs("results", exist_ok=True)
+    with open("results/proto_net_evaluation_log.txt", "w") as log_file:
+        # Evaluation loop
+        for n_way, k_shot, n_query in configs:
+            print(f"\nEvaluating {n_way}-way {k_shot}-shot:")
+            log_file.write(f"\n{n_way}-way {k_shot}-shot:\n")
+            try:
+                test_sampler = EpisodeSampler(test_dataset, n_way, k_shot, n_query)
+            except ValueError as e:
+                print(f"Cannot evaluate {n_way}-way {k_shot}-shot: {e}")
+                log_file.write(f"Cannot evaluate {n_way}-way {k_shot}-shot: {e}\n")
+                continue
 
-    # Optionally, save the results or plot them
-    # Save the results to a JSON file
-    import json
+            mean_acc, ci95, _ = evaluate_on_test(
+                model, test_sampler, device, n_episodes=100
+            )
 
-    with open("./results/proto_net_results.json", "w") as f:
-        json.dump(results, f)
+            result_str = f"Accuracy: {mean_acc*100:.2f}% ± {ci95*100:.2f}%\n"
+            print(result_str)
+            log_file.write(result_str)
+
+    print("\nResults have been saved to 'results/proto_net_evaluation_log.txt'")
+
+
+if __name__ == "__main__":
+    main()

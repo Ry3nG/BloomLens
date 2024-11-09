@@ -66,3 +66,41 @@ Test classes: [0, 18, 26, 38, 39, 44, 46, 48, 57, 70, 71, 74, 85, 86, 91, 100]
 Average images per class (test): 65.4
 Min images per class (test): 40
 Max images per class (test): 120
+
+# Report
+1. Introduction
+   - Problem overview
+   - Motivation for few-shot learning
+   - Project objectives
+
+2. Background & Related Work
+   - Traditional classification approaches
+   - Few-shot learning methods
+   - Prototypical Networks
+   - Progressive training
+
+3. Methodology
+   - Baseline architectures implementation
+   - Prototypical Network architecture
+   - Progressive training strategy
+   - Data augmentation techniques
+   - Feature extraction and evaluation
+
+4. Experiments
+   - Dataset details
+   - Training configurations
+   - Evaluation protocols
+   - Ablation studies:
+     - Effect of progressive training
+     - Impact of augmentations
+     - Comparison across architectures
+
+5. Results & Discussion
+   - Comparative analysis
+   - Few-shot learning performance
+   - Progressive training benefits
+   - Limitations and insights
+
+6. Conclusion
+   - Summary of findings
+   - Future work

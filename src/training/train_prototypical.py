@@ -25,6 +25,9 @@ from src.models.prototypical_network import (
     EpisodeSampler,
 )
 
+from torch.utils.data import Subset
+from collections import defaultdict
+
 
 def setup_wandb(config):
     # Create a more descriptive name that includes the stage
@@ -345,6 +348,112 @@ def evaluate_on_test(model, test_sampler, device, n_episodes=50):
     return mean_acc, std_acc
 
 
+def split_dataset(dataset, train_ratio=0.6, seed=42):
+    """
+    Split dataset by classes ensuring no class overlap between train and test.
+
+    Args:
+        dataset: Flowers102 dataset
+        train_ratio: Ratio of classes to use for training
+        seed: Random seed for reproducibility
+
+    Returns:
+        (train_indices, test_indices): Indices for train and test sets
+        (train_mapping, test_mapping): Class label mappings
+        (train_classes, test_classes): Original class labels
+    """
+    random.seed(seed)
+
+    # Group samples by class
+    class_samples = defaultdict(list)
+    for idx, (_, label) in enumerate(dataset):
+        class_samples[label].append(idx)
+
+    # Get all unique classes and shuffle them
+    all_classes = list(class_samples.keys())
+    random.shuffle(all_classes)
+
+    # Split classes into train and test
+    n_train_classes = int(len(all_classes) * train_ratio)
+    train_classes = all_classes[:n_train_classes]
+    test_classes = all_classes[n_train_classes:]
+
+    # Create new class mappings
+    train_mapping = {c: i for i, c in enumerate(train_classes)}
+    test_mapping = {c: i for i, c in enumerate(test_classes)}
+
+    # Get indices for train and test sets
+    train_indices = [idx for c in train_classes for idx in class_samples[c]]
+    test_indices = [idx for c in test_classes for idx in class_samples[c]]
+
+    return (
+        (train_indices, test_indices),
+        (train_mapping, test_mapping),
+        (train_classes, test_classes),
+    )
+
+
+class MappedSubset(Subset):
+    """Dataset wrapper that applies a class mapping"""
+
+    def __init__(self, dataset, indices, class_mapping):
+        super().__init__(dataset, indices)
+        self.class_mapping = class_mapping
+
+    def __getitem__(self, idx):
+        x, y = super().__getitem__(idx)
+        return x, self.class_mapping[y]
+
+
+def create_datasets(config):
+    """Create train, validation, and test datasets with proper class separation"""
+    # Get transforms
+    train_transform, eval_transform = get_transforms()
+
+    # Load full dataset
+    full_dataset = Flowers102(root="./data", download=True)
+
+    # Split dataset by classes
+    (
+        (train_indices, test_indices),
+        (train_mapping, test_mapping),
+        (train_classes, test_classes),
+    ) = split_dataset(full_dataset, train_ratio=0.6, seed=config["seed"])
+
+    # Further split train into train and val
+    train_val_split = 0.8
+    n_train = int(len(train_indices) * train_val_split)
+    random.shuffle(train_indices)
+    val_indices = train_indices[n_train:]
+    train_indices = train_indices[:n_train]
+
+    # Create datasets with appropriate transforms and mappings
+    train_dataset = MappedSubset(
+        Flowers102(root="./data", transform=train_transform, download=True),
+        train_indices,
+        train_mapping,
+    )
+
+    val_dataset = MappedSubset(
+        Flowers102(root="./data", transform=eval_transform, download=True),
+        val_indices,
+        train_mapping,
+    )
+
+    test_dataset = MappedSubset(
+        Flowers102(root="./data", transform=eval_transform, download=True),
+        test_indices,
+        test_mapping,
+    )
+
+    print(f"Number of classes - Train: {len(train_classes)}, Test: {len(test_classes)}")
+    print(
+        f"Number of samples - Train: {len(train_indices)}, Val: {len(val_indices)}, Test: {len(test_indices)}"
+    )
+
+    return train_dataset, val_dataset, test_dataset
+
+
 def progressive_training(resume_stage=None):
     """
     Implement progressive training with increasing n_way
@@ -383,11 +492,9 @@ def progressive_training(resume_stage=None):
     # Progressive training stages
     # Modified progressive training stages
     stages = [
-        {"n_way": 5, "epochs": 30, "n_query": 4},
-        {"n_way": 10, "epochs": 35, "n_query": 4},
-        {"n_way": 20, "epochs": 40, "n_query": 4},
-        {"n_way": 20, "epochs": 50, "n_query": 5},
-        {"n_way": 20, "epochs": 50, "n_query": 7},
+        {"n_way": 5, "epochs": 30, "n_query": 5},
+        {"n_way": 10, "epochs": 30, "n_query": 5},
+        {"n_way": 20, "epochs": 30, "n_query": 5},
     ]
 
     # Create test sampler
@@ -467,23 +574,19 @@ if __name__ == "__main__":
     if USE_PROGRESSIVE_TRAINING:
         progressive_training()
     else:
-        # Load dataset
-        train_transform, eval_transform = get_transforms()
-        train_dataset = Flowers102(
-            root="./data", split="train", transform=train_transform, download=True
-        )
-        val_dataset = Flowers102(
-            root="./data", split="val", transform=eval_transform, download=True
-        )
-        test_dataset = Flowers102(
-            root="./data", split="test", transform=eval_transform, download=True
-        )
+        # Create datasets with proper class separation
+        train_dataset, val_dataset, test_dataset = create_datasets(config)
+
+        # Create test sampler with proper number of classes
         test_sampler = EpisodeSampler(
             test_dataset,
-            n_way=20,  # We'll use maximum n_way for testing
+            n_way=min(
+                20, len(set(y for _, y in test_dataset))
+            ),  # Ensure n_way doesn't exceed available classes
             k_shot=1,
             n_query=5,
         )
+
         best_acc = train_prototypical_network(
             config, train_dataset, val_dataset, test_sampler
         )
