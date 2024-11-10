@@ -513,7 +513,7 @@ def progressive_training(resume_stage=None):
         "epochs": 100,
         "train_episodes": 100,
         "val_episodes": 50,
-        "patience": 10,
+        "patience": 20,
         "checkpoint_freq": 5,
         "lr": 2e-4,
         "weight_decay": 0.01,

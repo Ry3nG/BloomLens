@@ -319,5 +319,5 @@ def evaluate_prototypical(model_path, n_episodes=100):
 
 
 if __name__ == "__main__":
-    model_path = "/home/zrgong/data/BloomLens/checkpoints/stage_3/best_model.pt"
+    model_path = "/home/zrgong/data/BloomLens/checkpoints/run_20241110_093027/stage_3/best_model.pt"
     evaluate_prototypical(model_path, n_episodes=100)
