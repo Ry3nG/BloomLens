@@ -3,7 +3,7 @@ import os
 import wandb
 import torch
 import torch.optim as optim
-from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts
+from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts, OneCycleLR
 from torchvision import transforms
 from torchvision.datasets import Flowers102
 from tqdm import tqdm
@@ -30,18 +30,26 @@ from collections import defaultdict
 
 
 def setup_wandb(config):
+    # Create a unique run timestamp
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+
     # Create a more descriptive name that includes the stage
     run_name = f"{config['n_way']}way_{config['k_shot']}shot"
     if "stage" in config:
         run_name += f"_stage{config['stage']}"
 
+    # Add timestamp to run_name
+    run_name = f"{timestamp}_{run_name}"
+
+    # Store the timestamp in config for use in save_dir
+    config["timestamp"] = timestamp
+
     wandb.init(
         project="flower-proto-net",
         config=config,
         name=run_name,
-        # Optional: group runs from the same progressive training session
-        group=f"progressive_training_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}",
-        reinit=True,  # Allow multiple wandb.init() calls
+        group=f"progressive_training_{timestamp}",
+        reinit=True,
     )
 
 
@@ -114,6 +122,30 @@ def evaluate_model(model, sampler, device, n_episodes=100):
     return total_loss / n_episodes, total_acc / n_episodes
 
 
+def get_scheduler(optimizer, config, num_training_steps):
+    """
+    Get appropriate scheduler based on training stage
+    """
+    if config.get("stage", 1) == 1:
+        # First stage: Use OneCycleLR with warmup
+        return OneCycleLR(
+            optimizer,
+            max_lr=[group["lr"] for group in optimizer.param_groups],
+            total_steps=num_training_steps,
+            pct_start=0.3,  # 30% of training for warmup
+            div_factor=25,  # initial_lr = max_lr/25
+            final_div_factor=1e4,  # final_lr = initial_lr/10000
+        )
+    else:
+        # Later stages: Use CosineAnnealingWarmRestarts with shorter cycles
+        return CosineAnnealingWarmRestarts(
+            optimizer,
+            T_0=config["scheduler_T0"] // 2,  # Shorter initial cycle for later stages
+            T_mult=2,
+            eta_min=config["lr"] * 0.001,  # Lower minimum LR
+        )
+
+
 def train_prototypical_network(config, train_dataset, val_dataset, test_sampler=None):
     # Setup
     set_seed(config["seed"])
@@ -154,9 +186,8 @@ def train_prototypical_network(config, train_dataset, val_dataset, test_sampler=
         weight_decay=config["weight_decay"],
     )
 
-    scheduler = CosineAnnealingWarmRestarts(
-        optimizer, T_0=config["scheduler_T0"], T_mult=2, eta_min=config["lr"] * 0.01
-    )
+    num_training_steps = config["epochs"] * config["train_episodes"]
+    scheduler = get_scheduler(optimizer, config, num_training_steps)
 
     # Training loop
     best_val_acc = 0
@@ -188,8 +219,8 @@ def train_prototypical_network(config, train_dataset, val_dataset, test_sampler=
                     )
 
                 # Forward pass with mixed data
-                support_features = model(support_images)
-                query_features = model(query_images)
+                support_features = model(support_images, support_set=True)
+                query_features = model(query_images, support_set=False)
                 prototypes = compute_prototypes(support_features, support_labels)
 
                 # Compute mixed loss
@@ -458,6 +489,9 @@ def progressive_training(resume_stage=None):
     """
     Implement progressive training with increasing n_way
     """
+    # Create timestamp at the start
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+
     # Add dataset loading
     train_transform, eval_transform = get_transforms()
     train_dataset = Flowers102(
@@ -474,11 +508,12 @@ def progressive_training(resume_stage=None):
         # Base configuration (same as above)
         "feature_dim": 1024,
         "k_shot": 1,
-        "n_query": 4,
+        "n_way": 5,
+        "n_query": 5,
         "epochs": 100,
         "train_episodes": 100,
         "val_episodes": 50,
-        "patience": 20,
+        "patience": 10,
         "checkpoint_freq": 5,
         "lr": 2e-4,
         "weight_decay": 0.01,
@@ -487,14 +522,19 @@ def progressive_training(resume_stage=None):
         "aug_prob": 0.5,
         "seed": 42,
         "save_dir": "/home/zrgong/data/BloomLens/checkpoints",
+        "scheduler_type": "onecycle",  # or "cosine"
+        "warmup_steps": 0.2,  # 20% of training for warmup
+        "min_lr_factor": 0.001,  # minimum lr = initial_lr * min_lr_factor
+        "timestamp": timestamp,
     }
 
     # Progressive training stages
     # Modified progressive training stages
+    # we have early stopping, so we can use more epochs
     stages = [
-        {"n_way": 5, "epochs": 30, "n_query": 5},
-        {"n_way": 10, "epochs": 30, "n_query": 5},
-        {"n_way": 20, "epochs": 30, "n_query": 5},
+        {"n_way": 5, "epochs": 100, "n_query": 5},
+        {"n_way": 10, "epochs": 100, "n_query": 5},
+        {"n_way": 20, "epochs": 100, "n_query": 5},
     ]
 
     # Create test sampler
@@ -528,11 +568,12 @@ def progressive_training(resume_stage=None):
 
         current_config = base_config.copy()
         current_config.update(stage)
-        current_config["save_dir"] = (
-            f"/home/zrgong/data/BloomLens/checkpoints/stage_{stage_idx + 1}"
+        current_config["save_dir"] = os.path.join(
+            base_config["save_dir"],
+            f"run_{current_config['timestamp']}",
+            f"stage_{stage_idx + 1}",
         )
         current_config["stage"] = stage_idx + 1
-        # Pass the model from previous stage
         current_config["pretrained_model"] = model
 
         best_acc, test_metrics = train_prototypical_network(
@@ -568,6 +609,11 @@ if __name__ == "__main__":
         "seed": 42,
         "save_dir": "/home/zrgong/data/BloomLens/checkpoints",
     }
+
+    # Add timestamp to save_dir before training
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    config["timestamp"] = timestamp
+    config["save_dir"] = os.path.join(config["save_dir"], f"run_{timestamp}")
 
     USE_PROGRESSIVE_TRAINING = True
 

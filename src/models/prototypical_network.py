@@ -4,10 +4,12 @@ import torch.nn.functional as F
 from torchvision import models
 import numpy as np
 import random
+import torch.nn as nn
+from torch.nn import TransformerEncoder, TransformerEncoderLayer
 
 
 class PrototypicalNetwork(nn.Module):
-    def __init__(self, backbone="resnet50", feature_dim=1024):
+    def __init__(self, backbone="resnet50", feature_dim=1024, n_heads=8, n_layers=1):
         super(PrototypicalNetwork, self).__init__()
         # Initialize ResNet50 backbone
         resnet = models.resnet50(weights=models.ResNet50_Weights.IMAGENET1K_V2)
@@ -16,16 +18,32 @@ class PrototypicalNetwork(nn.Module):
         layers = list(resnet.children())[:-1]
         self.encoder = nn.Sequential(*layers)
 
-        # Multi-scale feature adaptation head
-        self.adaptation = nn.Sequential(
-            nn.Flatten(),
-            nn.Linear(2048, feature_dim),  # ResNet50 outputs 2048 features
+        # Flatten layer
+        self.flatten = nn.Flatten()
+
+        # Transformer encoder layer
+        encoder_layers = TransformerEncoderLayer(
+            d_model=2048,  # ResNet50 outputs 2048 features
+            nhead=n_heads,
+            dim_feedforward=feature_dim,
+            dropout=0.1,
+            activation="relu",
+            batch_first=True,  # Set batch_first=True for batch dimension first
+        )
+        self.transformer_encoder = TransformerEncoder(
+            encoder_layers, num_layers=n_layers
+        )
+
+        # Layer normalization after Transformer
+        self.layer_norm = nn.LayerNorm(2048)
+
+        # Final projection and normalization
+        self.projection = nn.Sequential(
+            nn.Linear(2048, feature_dim),
             nn.BatchNorm1d(feature_dim),
             nn.ReLU(),
-            nn.Dropout(0.3),
+            nn.Dropout(0.1),
             nn.Linear(feature_dim, feature_dim),
-            nn.BatchNorm1d(feature_dim),
-            nn.ReLU(),
             nn.LayerNorm(feature_dim),
         )
 
@@ -34,12 +52,25 @@ class PrototypicalNetwork(nn.Module):
             list(self.encoder[:4].parameters()),  # Early layers
             list(self.encoder[4:6].parameters()),  # Middle layers
             list(self.encoder[6:].parameters()),  # Late layers
-            list(self.adaptation.parameters()),  # Adaptation head
+            list(self.transformer_encoder.parameters()),  # Transformer encoder
+            list(self.projection.parameters()),  # Projection head
         ]
 
-    def forward(self, x):
-        x = self.encoder(x)
-        x = self.adaptation(x)
+    def forward(self, x, support_set=False):
+        x = self.encoder(x)  # (batch_size, 2048, 1, 1)
+        x = self.flatten(x)  # (batch_size, 2048)
+
+        if support_set:
+            # Add sequence dimension for Transformer
+            x = x.unsqueeze(0)  # (1, batch_size, 2048)
+            x = self.transformer_encoder(x)  # (1, batch_size, 2048)
+            x = x.squeeze(0)  # (batch_size, 2048)
+            x = self.layer_norm(x)
+        else:
+            # For query embeddings, no adaptation
+            pass
+
+        x = self.projection(x)
         return F.normalize(x, p=2, dim=1)  # L2 normalize embeddings
 
 
