@@ -1,139 +1,90 @@
-# BloomLens
+# 🌸 BloomLens: Few-shot Learning for Fine-grained Flower Classification with Prototypical Networks
 
-BloomLens: A Few-Shot Learning Framework for Fine-Grained Flower Classification
+[📖 Paper](docs/report.pdf) | [🎯 Models](src/models/prototypical_network.py) | [📊 Results](results/prototypical_results.md) |
 
-## Important Resources
-1. https://arxiv.org/pdf/2110.07097 : this has the table comparism we want
-2. https://www.researchgate.net/profile/Huthaifa-Almogdady/publication/329191674_A_Flower_Recognition_System_Based_On_Image_Processing_And_Neural_Networks/links/5bfc1036a6fdcc76e721c657/A-Flower-Recognition-System-Based-On-Image-Processing-And-Neural-Networks.pdf : This is the benchmark we want to beat
 
-## Project Overview
 
-This project aims to develop and evaluate a few-shot learning framework for fine-grained flower classification using the Oxford 102 Flower dataset. The project encompasses several key components, including baseline model evaluation, reduced data experiments, few-shot learning implementation, and explainability analysis.
+## 🌟 Highlights
 
-## Project Components
+- 🚀 **93.64%** accuracy on **5-way 1-shot** tasks
+- 🎯 **85.51%** accuracy on **20-way 1-shot** tasks
+- 📈 Scales to **40-way** tasks with **78.29%** accuracy
+- 🔄 Progressive training from **5-way** to **20-way**
+- 🤖 Transformer-enhanced feature adaptation
+- 🎨 Smart augmentation with **MixUp** and **CutMix**
 
-### A. Baseline Model Evaluation
+## 🤖 Model Components
+<img src="docs/diagrams/model_arch.png" alt="Demo" width="100%">
 
-**Objective**: Test and verify the performance of different pre-trained models on the Oxford 102 Flower dataset to establish baseline accuracies.
+## 📊 Performance on Oxford Flowers-102
+> Note: the specific data split is explained in the paper
 
-**Steps**:
-1. Set up environment
-2. Load the Oxford Flower Dataset
-3. Implement pre-trained models
-4. Create training pipeline with both cross-entropy and triplet loss
-5. Implement MixUp augmentation
-6. Monitor performance
+| Model                                   | 5-way 1-shot   | 5-way 5-shot   | 20-way 1-shot  | 20-way 5-shot  |
+|-----------------------------------------|-----------------|-----------------|-----------------|-----------------|
+| AlexNet                                 | 41.95 ± 2.01    | 52.16 ± 2.16    | 17.13 ± 0.76    | 22.75 ± 0.78    |
+| ResNet18                                | 57.59 ± 2.18    | 68.61 ± 2.29    | 31.39 ± 1.07    | 42.61 ± 0.97    |
+| ResNet50                                | 54.21 ± 2.23    | 63.95 ± 2.30    | 27.90 ± 0.94    | 38.16 ± 0.98    |
+| DenseNet121                             | 55.16 ± 2.08    | 67.61 ± 2.06    | 31.61 ± 1.08    | 43.69 ± 0.96    |
+| DenseNet201                             | 58.52 ± 2.36    | 69.51 ± 2.06    | 31.97 ± 1.20    | 44.47 ± 1.05    |
+| Bayesian Prompt | 70.40 ± 1.80    | 73.50 ± 1.50    | -               | -               |
+| **BloomLens (Ours)**                   | **93.64 ± 6.86**| **95.88 ± 5.20**| **85.51 ± 5.77**| **89.66 ± 4.00**|
 
-**Deliverable**:
-- Performance table of pre-trained models on the full dataset
-- Ablation study showing impact of MixUp and triplet loss
+## 🚀 Quick Start
 
-### B. Reduced Data Experiments
+### Installation
+```bash
+# Clone the repository
+git clone https://github.com/Ry3nG/BloomLens.git
 
-**Objective**: Test pre-trained backbone performance with systematically reduced dataset sizes.
+# Create conda environment
+conda env create -f environment.yml
 
-**Steps**:
-1. Define data reduction strategy
-2. Implement stratified sampling
-3. Train models on reduced datasets
-4. Generate performance comparison table
-5. Analyze computational efficiency at different data scales
+# Activate conda environment
+conda activate bloomlens
 
-**Deliverable**:
-- Table showing model performance degradation as dataset size is reduced
-- Computational efficiency metrics (training time, memory usage)
+```
 
-### C. Few-Shot Learning Implementation
+### Training
+```python
+python src/training/train_prototypical.py
+```
 
-**Objective**: Develop a few-shot learning model that outperforms pre-trained models with reduced data.
+### Testing
+```python
+# Testing Prototypical Network
+python src/evaluation/evaluate_prototypical.py
+# Testing Baseline Model
+python scripts/baseline_comparison_multimodel.py
 
-**Steps**:
-1. Select few-shot learning framework
-2. Prepare dataset for few-shot tasks
-3. Implement and train few-shot model
-4. Evaluate performance against baselines
-5. Conduct ablation studies on different components
+```
 
-**Deliverable**:
-- Performance comparison of few-shot model vs. pre-trained backbones on reduced data
-- Component-wise contribution analysis
+## Project Structure
 
-### D. Explainability Analysis
+```
+BloomLens/
+├── 📂 results/
+├── 📂 scripts/
+├── 📂 src/
+│   ├── 📂 data/
+│   ├── 📂 evaluation/
+│   ├── 📂 models/
+│   └── 📂 training/
+├── 📂 docs/
+│   └── 📂 diagrams/
+├── 📄 environment.yml
+└── 📄 README.md
+```
 
-**Objective**: Visualize and understand model decision-making processes for flower classification.
+## 📊 Monitoring
+Training progress can be monitored using wandb.
 
-**Steps**:
-1. Choose explainability method (e.g., Grad-CAM, SHAP)
-2. Generate attention maps for all models
-3. Compare explanations between few-shot and pre-trained models
-4. Quantitative evaluation of attention maps
-5. Analysis of failure cases
+```bash
+wandb login # login to wandb
+```
+```python
+import wandb
+wandb.init(project="bloomlens")
+```
 
-**Deliverable**:
-- Visualizations and comparison of model interpretability
-- Quantitative metrics for attention map evaluation
-- Failure case analysis with explanations
 
-## Final Report Structure
 
-1. **Introduction**
-   - Problem definition
-   - Importance of reduced data handling and explainability
-   - Technical challenges in fine-grained classification
-
-2. **Related Work**
-   - Pre-trained models in image classification
-   - Few-shot learning techniques
-   - Explainability methods
-   - MixUp and triplet loss applications
-
-3. **Methodology**
-   - Experimental setup for baseline models
-   - Data reduction strategy
-   - Few-shot learning implementation
-   - Advanced training techniques (MixUp, triplet loss)
-   - Explainability methods
-
-4. **Experiments**
-   - Baseline results (full dataset)
-   - Reduced data experiment results
-   - Few-shot learning model performance
-   - Ablation studies
-   - Computational efficiency analysis
-
-5. **Explainability**
-   - Attention maps presentation
-   - Quantitative evaluation metrics
-   - Interpretation comparisons
-   - Failure case analysis
-
-6. **Discussion**
-   - Impact of reduced data on model performance
-   - Advantages and limitations of few-shot learning
-   - Interpretation of explainability results
-   - Trade-offs between performance and computational efficiency
-
-7. **Conclusion**
-   - Key findings summary
-   - Future research directions
-   - Practical implications
-
-## Project Timeline
-
-- Week 1-2: Environment setup, baseline implementation
-- Week 3: Reduced data experiments, MixUp implementation
-- Week 4: Few-shot learning implementation
-- Week 5: Explainability analysis
-- Final Week: Report writing and result compilation
-
-## Getting Started
-
-(Add instructions for setting up the project, installing dependencies, and running experiments)
-
-## Contributors
-
-(List project contributors)
-
-## License
-
-(Specify the project license)
