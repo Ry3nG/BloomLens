@@ -1,11 +1,11 @@
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
-from torchvision import models
-import numpy as np
-import random
-import torch.nn as nn
-from torch.nn import TransformerEncoder, TransformerEncoderLayer
+import torch  # type: ignore
+import torch.nn as nn  # type: ignore
+import torch.nn.functional as F  # type: ignore
+from torchvision import models  # type: ignore
+import numpy as np  # type: ignore
+import random  # type: ignore
+import torch.nn as nn  # type: ignore
+from torch.nn import TransformerEncoder, TransformerEncoderLayer  # type: ignore
 
 
 class PrototypicalNetwork(nn.Module):

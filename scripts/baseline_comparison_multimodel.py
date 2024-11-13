@@ -1,64 +1,21 @@
-import torch
-import torch.nn as nn
-import torchvision.models as models
-import torchvision.transforms as transforms
-from torchvision.datasets import Flowers102
-from torch.utils.data import DataLoader, Subset, Dataset
-import numpy as np
-from sklearn.neighbors import KNeighborsClassifier
-from sklearn.metrics import accuracy_score
-import matplotlib.pyplot as plt
-from tqdm import tqdm
+import torch  # type: ignore
+import torch.nn as nn  # type: ignore
+import torchvision.models as models  # type: ignore
+import torchvision.transforms as transforms  # type: ignore
+from torchvision.datasets import Flowers102  # type: ignore
+from torch.utils.data import DataLoader, Subset, Dataset  # type: ignore
+import numpy as np  # type: ignore
+from sklearn.neighbors import KNeighborsClassifier  # type: ignore
+from sklearn.metrics import accuracy_score  # type: ignore
+import matplotlib.pyplot as plt  # type: ignore
+from tqdm import tqdm  # type: ignore
 import random
 import os
-from tabulate import tabulate
+from tabulate import tabulate  # type: ignore
 import pathlib
 import json
 from typing import Dict, Tuple, List, Any
-
-
-class MappedSubset(Dataset):
-    """Custom Dataset that applies class mapping"""
-
-    def __init__(self, dataset, indices, class_to_idx):
-        self.dataset = dataset
-        self.indices = indices
-        self.class_to_idx = class_to_idx
-
-    def __getitem__(self, idx):
-        image, label = self.dataset[self.indices[idx]]
-        mapped_label = self.class_to_idx[label]
-        return image, mapped_label
-
-    def __len__(self):
-        return len(self.indices)
-
-
-def split_dataset(dataset):
-    """Split dataset into train and test sets based on classes"""
-    all_classes = list(range(102))
-    random.shuffle(all_classes)
-
-    train_classes = all_classes[:60]
-    test_classes = all_classes[60:]
-
-    train_indices = []
-    test_indices = []
-
-    for idx, (_, label) in enumerate(dataset):
-        if label in train_classes:
-            train_indices.append(idx)
-        else:
-            test_indices.append(idx)
-
-    train_class_to_idx = {label: idx for idx, label in enumerate(sorted(train_classes))}
-    test_class_to_idx = {label: idx for idx, label in enumerate(sorted(test_classes))}
-
-    return (
-        (train_indices, test_indices),
-        (train_class_to_idx, test_class_to_idx),
-        (train_classes, test_classes),
-    )
+from src.data.dataset import MappedSubset, split_dataset
 
 
 class BaselineModel(nn.Module):
@@ -68,7 +25,6 @@ class BaselineModel(nn.Module):
         super().__init__()
         self.architecture = architecture
 
-        # Dictionary mapping architecture names to model constructors
         model_constructors = {
             "alexnet": (models.alexnet, models.AlexNet_Weights.DEFAULT),
             "resnet18": (models.resnet18, models.ResNet18_Weights.DEFAULT),
@@ -88,7 +44,7 @@ class BaselineModel(nn.Module):
             raise ValueError(f"Unsupported architecture: {architecture}")
 
         model_fn, weights = model_constructors[architecture]
-        self.model = model_fn(weights=None)  # No weights for now
+        self.model = model_fn(weights=None)
 
         # Modify the final layer based on architecture
         if architecture.startswith("resnet"):
@@ -230,7 +186,7 @@ def run_few_shot_evaluation(
         classes = np.random.choice(np.unique(labels), n_way, replace=False)
 
         episode_accuracies = []
-        for _ in range(n_query):  # Multiple queries per episode
+        for _ in range(n_query):
             support_features = []
             support_labels = []
             query_features = []
@@ -375,7 +331,6 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
 
-    # Define architectures to test
     architectures = [
         "alexnet",
         "resnet18",

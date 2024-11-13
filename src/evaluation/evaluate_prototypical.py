@@ -8,7 +8,6 @@ import seaborn as sns  # type: ignore
 import matplotlib.pyplot as plt  # type: ignore
 import os
 
-# Add your project's root directory to sys.path
 sys.path.append(str(Path(__file__).parent.parent.parent))
 
 from src.training.train_prototypical import get_transforms, evaluate_on_test
@@ -309,8 +308,6 @@ def evaluate_prototypical(model_path, n_episodes=100):
             ha="center",
             va="bottom",
         )
-
-    # Adjust layout and save
     plt.tight_layout()
     plt.savefig(os.path.join(results_dir, "prototypical_evaluation_results.png"))
     plt.close()

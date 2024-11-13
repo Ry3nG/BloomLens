@@ -1,23 +1,32 @@
-import torch
-from torchvision import datasets, transforms
-import matplotlib.pyplot as plt
-import numpy as np
-from collections import Counter
-import scipy.io
+import torch  # type: ignore
+from torchvision import datasets, transforms  # type: ignore
+import matplotlib.pyplot as plt  # type: ignore
+import numpy as np  # type: ignore
+from collections import Counter  # type: ignore
+import scipy.io  # type: ignore
 
 # Set the root directory for the dataset
-root_dir = './data/flowers102'
+root_dir = "./data/flowers102"
 
 # Define a simple transform (we'll just resize the images for exploration)
-transform = transforms.Compose([
-    transforms.Resize((224, 224)),
-    transforms.ToTensor(),
-])
+transform = transforms.Compose(
+    [
+        transforms.Resize((224, 224)),
+        transforms.ToTensor(),
+    ]
+)
 
 # Load the training dataset
-train_dataset = datasets.Flowers102(root=root_dir, split='train', transform=transform, download=True)
-val_dataset = datasets.Flowers102(root=root_dir, split='val', transform=transform, download=True)
-test_dataset = datasets.Flowers102(root=root_dir, split='test', transform=transform, download=True)
+train_dataset = datasets.Flowers102(
+    root=root_dir, split="train", transform=transform, download=True
+)
+val_dataset = datasets.Flowers102(
+    root=root_dir, split="val", transform=transform, download=True
+)
+test_dataset = datasets.Flowers102(
+    root=root_dir, split="test", transform=transform, download=True
+)
+
 
 # Function to explore dataset statistics
 def explore_dataset(dataset, split_name):
@@ -39,12 +48,15 @@ def explore_dataset(dataset, split_name):
 
     # Plot class distribution
     plt.figure(figsize=(15, 5))
-    plt.bar(range(len(class_counts)), [class_counts[i] for i in sorted(class_counts.keys())])
+    plt.bar(
+        range(len(class_counts)), [class_counts[i] for i in sorted(class_counts.keys())]
+    )
     plt.title(f"Class Distribution - {split_name}")
     plt.xlabel("Class Index")
     plt.ylabel("Number of Samples")
     plt.savefig(f"class_distribution_{split_name.lower()}.png")
     plt.close()
+
 
 # Function to display sample images
 def display_sample_images(dataset, num_samples=5):
@@ -54,15 +66,17 @@ def display_sample_images(dataset, num_samples=5):
         img, label = dataset[idx]
         axes[i].imshow(img.permute(1, 2, 0))
         axes[i].set_title(f"Class: {label}")
-        axes[i].axis('off')
+        axes[i].axis("off")
     plt.savefig("sample_images.png")
     plt.close()
+
 
 # Function to load category names
 def load_category_names(root_dir):
     cat_file = scipy.io.loadmat(f"{root_dir}/cat_to_name.mat")
-    cat_to_name = {i: name[0] for i, name in enumerate(cat_file['cat_to_name'][0], 1)}
+    cat_to_name = {i: name[0] for i, name in enumerate(cat_file["cat_to_name"][0], 1)}
     return cat_to_name
+
 
 # Main exploration
 print("Exploring the 102 Flowers Dataset:")

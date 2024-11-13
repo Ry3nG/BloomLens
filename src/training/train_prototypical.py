@@ -1,13 +1,13 @@
 import datetime
 import os
 import wandb
-import torch
-import torch.optim as optim
-from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts, OneCycleLR
-from torchvision import transforms
-from torchvision.datasets import Flowers102
-from tqdm import tqdm
-import numpy as np
+import torch  # type: ignore
+import torch.optim as optim  # type: ignore
+from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts, OneCycleLR  # type: ignore
+from torchvision import transforms  # type: ignore
+from torchvision.datasets import Flowers102  # type: ignore
+from tqdm import tqdm  # type: ignore
+import numpy as np  # type: ignore
 import random
 from pathlib import Path
 
@@ -25,23 +25,19 @@ from src.models.prototypical_network import (
     EpisodeSampler,
 )
 
-from torch.utils.data import Subset
-from collections import defaultdict
+from torch.utils.data import Subset  # type: ignore
+from collections import defaultdict  # type: ignore
 
 
 def setup_wandb(config):
-    # Create a unique run timestamp
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
 
-    # Create a more descriptive name that includes the stage
     run_name = f"{config['n_way']}way_{config['k_shot']}shot"
     if "stage" in config:
         run_name += f"_stage{config['stage']}"
 
-    # Add timestamp to run_name
     run_name = f"{timestamp}_{run_name}"
 
-    # Store the timestamp in config for use in save_dir
     config["timestamp"] = timestamp
 
     wandb.init(
@@ -100,7 +96,6 @@ def evaluate_model(model, sampler, device, n_episodes=100):
             # Sample episode
             batch = sampler.sample_episode()
 
-            # Move to device
             support_images = batch["support_images"].to(device)
             support_labels = batch["support_labels"].to(device)
             query_images = batch["query_images"].to(device)
@@ -332,12 +327,13 @@ def train_prototypical_network(config, train_dataset, val_dataset, test_sampler=
         # Evaluate on test set
         test_acc, test_std = evaluate_on_test(model, test_sampler, device)
 
-        # log test results (this will work now as we're in the same wandb session)
+        # log test results
+        # todo: fix wandb
         wandb.log(
             {
                 "test_accuracy": test_acc,
                 "test_std": test_std,
-                "final_test_metrics": True,  # Flag to identify these are final test metrics
+                "final_test_metrics": True,
             }
         )
         print(f"Test Accuracy: {test_acc:.4f} ± {test_std:.4f}")
@@ -352,7 +348,7 @@ def evaluate_on_test(model, test_sampler, device, n_episodes=50):
     """Evaluate model on test set"""
     model.eval()
     total_acc = 0
-    accuracies = []  # Store individual episode accuracies
+    accuracies = []
 
     with torch.no_grad():
         for _ in tqdm(range(n_episodes), desc="Test Evaluation"):
@@ -530,7 +526,6 @@ def progressive_training(resume_stage=None):
 
     # Progressive training stages
     # Modified progressive training stages
-    # we have early stopping, so we can use more epochs
     stages = [
         {"n_way": 5, "epochs": 100, "n_query": 5},
         {"n_way": 10, "epochs": 100, "n_query": 5},
@@ -591,7 +586,7 @@ if __name__ == "__main__":
         "feature_dim": 1024,
         "n_way": 5,  # Start with 5-way classification
         "k_shot": 1,  # 1-shot learning
-        "n_query": 4,  # Reduced query samples per class (considering ~10 samples per class)
+        "n_query": 4,  # Reduced query samples per class
         # Training configuration
         "epochs": 100,
         "train_episodes": 100,  # Reduced episodes per epoch
